@@ -25,7 +25,6 @@ cooldown_click = 0
 screen_width, screen_height = pyautogui.size()
 puno_bloqueado = False 
 
-# NUEVAS VARIABLES PARA EL DOBLE CLIC Y CLICS FANTASMAS
 estado_pellizco_anterior = False
 tiempo_ultimo_clic = 0.0
 
@@ -36,11 +35,15 @@ def is_finger_up(tip_y, mid_y, base_y):
 
 def count_fingers(hand_landmarks):
     dedos = [False, False, False, False, False]
-    ancho_palma = np.hypot(hand_landmarks[5].x - hand_landmarks[17].x, hand_landmarks[5].y - hand_landmarks[17].y)
-    distancia_pulgar = np.hypot(hand_landmarks[4].x - hand_landmarks[17].x, hand_landmarks[4].y - hand_landmarks[17].y)
     
-    # UMBRAL MÁS ESTRICTO PARA CONGELAR EL CURSOR (Evita que se trabe por accidente)
-    pulgar_muy_extendido = distancia_pulgar > (ancho_palma * 1.5)
+    ancho_palma = np.hypot(hand_landmarks[5].x - hand_landmarks[17].x, hand_landmarks[5].y - hand_landmarks[17].y)
+    distancia_pulgar_indice = np.hypot(hand_landmarks[4].x - hand_landmarks[5].x, hand_landmarks[4].y - hand_landmarks[5].y)
+    
+    # --- LA CORRECCIÓN DE CALIBRACIÓN ---
+    # Bajamos de 1.1 a 0.85. Ahora detectará un pulgar separado de forma natural (gesto de "L"),
+    # sin exigirte que lo estires hasta que duela.
+    pulgar_muy_extendido = distancia_pulgar_indice > (ancho_palma * 0.85)
+    
     if pulgar_muy_extendido:
         dedos[0] = True
 
@@ -87,54 +90,53 @@ def process_mouse_and_draw(bgr_frame, detection_result):
         p_pulgar = hand_landmarks[4]
         p_indice = hand_landmarks[8] 
         
-        # LÓGICA DE PELLIZCO
+        # Pellizco: Mantenemos el umbral de 0.35 que te funcionó perfecto contra clics fantasmas
         distancia_pinza = np.hypot(p_indice.x - p_pulgar.x, p_indice.y - p_pulgar.y)
         es_pellizco = distancia_pinza < (ancho_palma * 0.35)
         
         if cantidad_dedos >= 2: puno_bloqueado = False
 
-        # --- 1. MOVER CURSOR (Fluido y sin trabas) ---
-        # Solo se detiene si realmente estiras el pulgar hacia afuera (dedos_levantados[0] = True)
+       # --- 1. MOVER CURSOR ---
         if dedos_levantados[1] and not dedos_levantados[0] and not es_pellizco and not dedos_levantados[2]:
             accion_actual = "MOVER CURSOR"
-            # Ampliamos la sensibilidad para llegar a las esquinas fácil (0.2 a 0.8)
-            target_x = np.interp(p_indice.x, (0.2, 0.8), (0, screen_width))
-            target_y = np.interp(p_indice.y, (0.2, 0.8), (0, screen_height))
+            
+            # --- ZONA ACTIVA OPTIMIZADA (Virtual Bounding Box) ---
+            # X: 15% al 85% de la cámara
+            # Y: 15% al 65% de la cámara (El 0.65 asegura que llegues a la barra de tareas rápido)
+            target_x = np.interp(p_indice.x, (0.15, 0.85), (0, screen_width))
+            target_y = np.interp(p_indice.y, (0.15, 0.65), (0, screen_height))
             
             smooth_x = smooth_x + (target_x - smooth_x) / 5
             smooth_y = smooth_y + (target_y - smooth_y) / 5
             pyautogui.moveTo(int(smooth_x), int(smooth_y))
 
-        # --- 2. LÓGICA DE CLICS CON MEMORIA (Adiós clics fantasmas y hola Doble Clic) ---
+        # --- 2. LÓGICA DE CLICS CON MEMORIA ---
         if es_pellizco and not estado_pellizco_anterior and not dedos_levantados[2]:
             tiempo_actual = time.time()
             
-            # Si pasaron menos de 0.5 segundos desde el último clic, es un DOBLE CLIC
             if (tiempo_actual - tiempo_ultimo_clic) < 0.5:
                 pyautogui.doubleClick()
                 accion_actual = "DOBLE CLIC!"
-                tiempo_ultimo_clic = 0.0  # Reseteamos el contador
+                tiempo_ultimo_clic = 0.0  
             else:
-                # Si es el primer pellizco, es un CLIC SENCILLO
                 pyautogui.click()
                 accion_actual = "CLIC IZQUIERDO"
                 tiempo_ultimo_clic = tiempo_actual
                 
-        # Guardamos el estado para el siguiente frame (Flanco de subida)
         estado_pellizco_anterior = es_pellizco
 
         if cooldown_click == 0:
-            # 3. CONGELADO (APUNTA): Índice arriba y Pulgar ESTIRADO (pistola)
+            # --- 3. CONGELADO (APUNTA) ---
             if dedos_levantados[1] and dedos_levantados[0] and not es_pellizco and not dedos_levantados[2]:
                 accion_actual = "CONGELADO (Apunta)"
 
-            # 4. CLIC DERECHO: Pulgar, Índice y Medio arriba
+            # --- 4. CLIC DERECHO ---
             elif dedos_levantados[0] and dedos_levantados[1] and dedos_levantados[2]:
                 pyautogui.rightClick()
                 cooldown_click = 15
                 accion_actual = "CLIC DERECHO"
 
-            # 5. MINIMIZAR TODO (Puño cerrado)
+            # --- 5. MINIMIZAR TODO --- 
             elif cantidad_dedos == 0 and not puno_bloqueado and not es_pellizco:
                 pyautogui.hotkey('win', 'd')
                 puno_bloqueado = True  
@@ -146,8 +148,12 @@ def process_mouse_and_draw(bgr_frame, detection_result):
             cv2.line(annotated, points[start], points[end], (0, 200, 255), 2)
         for i, point in enumerate(points):
             color = (0, 255, 100) if i in FINGER_TIPS else (255, 255, 255)
-            if es_pellizco and i in [4, 8]: color = (0, 0, 255) # Rojo al pellizcar
+            if es_pellizco and i in [4, 8]: color = (0, 0, 255) 
             cv2.circle(annotated, point, 6, color, -1)
+            
+    # --- DIBUJAR LA CAJA VIRTUAL (Área Activa) ---
+    # Esto le mostrará a la maestra exactamente en qué recuadro debes mover la mano
+    cv2.rectangle(annotated, (int(w * 0.15), int(h * 0.15)), (int(w * 0.85), int(h * 0.65)), (255, 0, 255), 2)
             
     # Panel de control
     overlay = annotated.copy()
