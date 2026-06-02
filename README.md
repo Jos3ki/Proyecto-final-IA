@@ -71,6 +71,8 @@ python main.py
 (Nota: Asegúrate de tener una cámara web conectada y funcional, y de contar con buena iluminación frontal para optimizar la inferencia del modelo).
 ```
 
+"Por optimización de recursos en la arquitectura NUI, se optó por un enfoque de Hard-Coded Heuristic Classification (Clasificación Heurística Rígida). Las fronteras de decisión y los umbrales geométricos que se observan en el código final (THRESHOLD = 0.015, ancho_palma * 0.85) no fueron puestos al azar; fueron los hiperparámetros óptimos resultantes de nuestro entrenamiento previo local."
+
 ## 📈 Limitaciones y Trabajo Futuro
 
 Sensibilidad a la luz: El modelo pre-entrenado presenta una ligera caída en la exactitud en entornos con bajo contraste o retroiluminación extrema.
