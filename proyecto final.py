@@ -2,10 +2,11 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import pyautogui
+import time
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-# --- OPTIMIZACIÓN CRÍTICA DE PERIFÉRICOS ---
+# --- OPTIMIZACIÓN CRÍTICA ---
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.0  
 
@@ -17,51 +18,45 @@ HANDEDNESS_TEXT_COLOR = (88, 205, 54)
 FINGER_TIPS  = [4,  8,  12, 16, 20]
 FINGER_MID   = [3,  7,  11, 15, 19]
 FINGER_BASES = [2,  6,  10, 14, 18]
-
 THRESHOLD = 0.015           
-THUMB_ANGLE_THRESHOLD = 150 
 
 smooth_x, smooth_y = 0, 0
 cooldown_click = 0
 screen_width, screen_height = pyautogui.size()
-
-# Bloqueo de Puño
 puno_bloqueado = False 
 
-def calculate_angle(p1, p2, p3):
-    v1 = p1 - p2
-    v2 = p3 - p2
-    dot = np.dot(v1, v2)
-    mag = np.linalg.norm(v1) * np.linalg.norm(v2)
-    if mag == 0: return 0.0
-    cos_angle = np.clip(dot / mag, -1.0, 1.0)
-    return np.degrees(np.arccos(cos_angle))
+# NUEVAS VARIABLES PARA EL DOBLE CLIC Y CLICS FANTASMAS
+estado_pellizco_anterior = False
+tiempo_ultimo_clic = 0.0
 
 def is_finger_up(tip_y, mid_y, base_y):
     above_mid  = (mid_y  - tip_y) > THRESHOLD
     above_base = (base_y - tip_y) > THRESHOLD
     return above_mid and above_base
 
-def is_thumb_up(hand_landmarks):
-    p0 = np.array([hand_landmarks[0].x,  hand_landmarks[0].y])
-    p2 = np.array([hand_landmarks[2].x,  hand_landmarks[2].y])
-    p4 = np.array([hand_landmarks[4].x,  hand_landmarks[4].y])
-    angle = calculate_angle(p0, p2, p4)
-    return angle > THUMB_ANGLE_THRESHOLD
-
 def count_fingers(hand_landmarks):
     dedos = [False, False, False, False, False]
-    if is_thumb_up(hand_landmarks): dedos[0] = True
+    ancho_palma = np.hypot(hand_landmarks[5].x - hand_landmarks[17].x, hand_landmarks[5].y - hand_landmarks[17].y)
+    distancia_pulgar = np.hypot(hand_landmarks[4].x - hand_landmarks[17].x, hand_landmarks[4].y - hand_landmarks[17].y)
+    
+    # UMBRAL MÁS ESTRICTO PARA CONGELAR EL CURSOR (Evita que se trabe por accidente)
+    pulgar_muy_extendido = distancia_pulgar > (ancho_palma * 1.5)
+    if pulgar_muy_extendido:
+        dedos[0] = True
+
     for idx, (tip_idx, mid_idx, base_idx) in enumerate(zip(FINGER_TIPS[1:], FINGER_MID[1:], FINGER_BASES[1:]), start=1):
         tip_y  = hand_landmarks[tip_idx].y
         mid_y  = hand_landmarks[mid_idx].y
         base_y = hand_landmarks[base_idx].y
         if is_finger_up(tip_y, mid_y, base_y):
             dedos[idx] = True
-    return dedos
+            
+    return dedos, ancho_palma
 
 def process_mouse_and_draw(bgr_frame, detection_result):
     global smooth_x, smooth_y, cooldown_click, puno_bloqueado
+    global estado_pellizco_anterior, tiempo_ultimo_clic
+    
     annotated = np.copy(bgr_frame)
     h, w, _ = annotated.shape
 
@@ -83,63 +78,64 @@ def process_mouse_and_draw(bgr_frame, detection_result):
         hand_landmarks = hand_landmarks_list[idx]
         handedness     = handedness_list[idx]
         label          = handedness[0].category_name
-
         points = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
 
-        dedos_levantados = count_fingers(hand_landmarks)
+        dedos_levantados, ancho_palma = count_fingers(hand_landmarks)
         cantidad_dedos = sum(dedos_levantados)
         total_fingers += cantidad_dedos
 
         p_pulgar = hand_landmarks[4]
         p_indice = hand_landmarks[8] 
         
-        # CÁLCULO DE DISTANCIA DEL PELLIZCO (Pinch)
+        # LÓGICA DE PELLIZCO
         distancia_pinza = np.hypot(p_indice.x - p_pulgar.x, p_indice.y - p_pulgar.y)
+        es_pellizco = distancia_pinza < (ancho_palma * 0.35)
         
-        # --- DESBLOQUEO DEL PUÑO ---
-        if cantidad_dedos >= 2:
-            puno_bloqueado = False
+        if cantidad_dedos >= 2: puno_bloqueado = False
 
-        # --- LÓGICA DE INTERACCIÓN NUI (Natural User Interface) ---
-        
-        # 1. MOVER CURSOR: Índice arriba. Pulgar estrictamente ABAJO.
-        if dedos_levantados[1] and not dedos_levantados[0] and not dedos_levantados[2]:
+        # --- 1. MOVER CURSOR (Fluido y sin trabas) ---
+        # Solo se detiene si realmente estiras el pulgar hacia afuera (dedos_levantados[0] = True)
+        if dedos_levantados[1] and not dedos_levantados[0] and not es_pellizco and not dedos_levantados[2]:
             accion_actual = "MOVER CURSOR"
-            target_x = np.interp(p_indice.x, (0.3, 0.7), (0, screen_width))
-            target_y = np.interp(p_indice.y, (0.3, 0.7), (0, screen_height))
+            # Ampliamos la sensibilidad para llegar a las esquinas fácil (0.2 a 0.8)
+            target_x = np.interp(p_indice.x, (0.2, 0.8), (0, screen_width))
+            target_y = np.interp(p_indice.y, (0.2, 0.8), (0, screen_height))
             
-            smooth_x = smooth_x + (target_x - smooth_x) / 6
-            smooth_y = smooth_y + (target_y - smooth_y) / 6
+            smooth_x = smooth_x + (target_x - smooth_x) / 5
+            smooth_y = smooth_y + (target_y - smooth_y) / 5
             pyautogui.moveTo(int(smooth_x), int(smooth_y))
 
-        if cooldown_click == 0:
+        # --- 2. LÓGICA DE CLICS CON MEMORIA (Adiós clics fantasmas y hola Doble Clic) ---
+        if es_pellizco and not estado_pellizco_anterior and not dedos_levantados[2]:
+            tiempo_actual = time.time()
             
-            # 2. PELLIZCO (CLIC IZQUIERDO): Si juntas las puntas hace el clic
-            if distancia_pinza < 0.04 and not dedos_levantados[2]:
+            # Si pasaron menos de 0.5 segundos desde el último clic, es un DOBLE CLIC
+            if (tiempo_actual - tiempo_ultimo_clic) < 0.5:
+                pyautogui.doubleClick()
+                accion_actual = "DOBLE CLIC!"
+                tiempo_ultimo_clic = 0.0  # Reseteamos el contador
+            else:
+                # Si es el primer pellizco, es un CLIC SENCILLO
                 pyautogui.click()
-                cooldown_click = 15
-                accion_actual = "CLIC IZQ (Pellizco!)"
+                accion_actual = "CLIC IZQUIERDO"
+                tiempo_ultimo_clic = tiempo_actual
+                
+        # Guardamos el estado para el siguiente frame (Flanco de subida)
+        estado_pellizco_anterior = es_pellizco
 
-            # 3. CONGELADO (PREPARAR CLIC): Pulgar e Índice arriba, pero separados
-            elif dedos_levantados[0] and dedos_levantados[1] and not dedos_levantados[2] and distancia_pinza >= 0.04:
+        if cooldown_click == 0:
+            # 3. CONGELADO (APUNTA): Índice arriba y Pulgar ESTIRADO (pistola)
+            if dedos_levantados[1] and dedos_levantados[0] and not es_pellizco and not dedos_levantados[2]:
                 accion_actual = "CONGELADO (Apunta)"
-                # No hay movimiento de mouse aquí, se queda quieto como pediste
 
             # 4. CLIC DERECHO: Pulgar, Índice y Medio arriba
             elif dedos_levantados[0] and dedos_levantados[1] and dedos_levantados[2]:
                 pyautogui.rightClick()
                 cooldown_click = 15
-                accion_actual = "CLIC DER"
+                accion_actual = "CLIC DERECHO"
 
-            # 5. DOBLE CLIC: Índice y Medio arriba (Sin pulgar)
-            elif not dedos_levantados[0] and dedos_levantados[1] and dedos_levantados[2]:
-                pyautogui.doubleClick()
-                cooldown_click = 15
-                accion_actual = "DOBLE CLIC"
-
-            # 6. MINIMIZAR TODO (Puño cerrado)
-            # Validamos que no esté pellizcando para que no se confunda el puño
-            elif cantidad_dedos == 0 and not puno_bloqueado and distancia_pinza >= 0.05:
+            # 5. MINIMIZAR TODO (Puño cerrado)
+            elif cantidad_dedos == 0 and not puno_bloqueado and not es_pellizco:
                 pyautogui.hotkey('win', 'd')
                 puno_bloqueado = True  
                 cooldown_click = 20
@@ -150,12 +146,10 @@ def process_mouse_and_draw(bgr_frame, detection_result):
             cv2.line(annotated, points[start], points[end], (0, 200, 255), 2)
         for i, point in enumerate(points):
             color = (0, 255, 100) if i in FINGER_TIPS else (255, 255, 255)
-            # Dibujar un círculo rojo en el índice y pulgar si están pellizcando
-            if distancia_pinza < 0.04 and i in [4, 8]:
-                color = (0, 0, 255)
+            if es_pellizco and i in [4, 8]: color = (0, 0, 255) # Rojo al pellizcar
             cv2.circle(annotated, point, 6, color, -1)
             
-    # Panel de control superior
+    # Panel de control
     overlay = annotated.copy()
     cv2.rectangle(overlay, (10, 10), (380, 90), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.5, annotated, 0.5, 0, annotated)
@@ -164,7 +158,7 @@ def process_mouse_and_draw(bgr_frame, detection_result):
 
     return annotated
 
-# --- CONFIGURACIÓN MEDIAPIPE ---
+# --- CONFIGURACIÓN ---
 base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
 options = vision.HandLandmarkerOptions(
     base_options=base_options, num_hands=1, running_mode=vision.RunningMode.VIDEO
@@ -186,7 +180,7 @@ while True:
     frame_timestamp += 1
 
     output_frame = process_mouse_and_draw(frame, detection_result)
-    cv2.imshow("Mouse Virtual Inteligente - Pinch to Click", output_frame)
+    cv2.imshow("Mouse Virtual Inteligente - Proyecto Final", output_frame)
 
     if cv2.waitKey(5) & 0xFF in [ord('q'), 27]: break
 
