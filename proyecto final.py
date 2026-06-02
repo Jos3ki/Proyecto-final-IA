@@ -3,6 +3,7 @@ import mediapipe as mp
 import numpy as np
 import pyautogui
 import time
+import tkinter as tk  # LIBRERÍA PARA EL WIDGET FLOTANTE
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
@@ -28,6 +29,23 @@ puno_bloqueado = False
 estado_pellizco_anterior = False
 tiempo_ultimo_clic = 0.0
 
+# =====================================================================
+# INTERFAZ GRÁFICA FLOTANTE (OVERLAY ANTI-MINIMIZAR)
+# =====================================================================
+overlay_tk = tk.Tk()
+overlay_tk.geometry("320x70+20+20")  # Tamaño y posición (X=20, Y=20)
+overlay_tk.overrideredirect(True)    # Magia: Quita bordes y evita el Win+D
+overlay_tk.attributes("-topmost", True) # Siempre al frente
+overlay_tk.configure(bg='#0F172A')   # Diseño minimalista en azul marino oscuro
+
+# Etiquetas de texto para el Widget
+lbl_titulo = tk.Label(overlay_tk, text="FIMAZ - IA Mouse Virtual", font=("Segoe UI", 8, "bold"), bg='#0F172A', fg='#94A3B8')
+lbl_titulo.pack(anchor='w', padx=10, pady=(5,0))
+
+lbl_accion = tk.Label(overlay_tk, text="ESTADO: INICIANDO...", font=("Segoe UI", 12, "bold"), bg='#0F172A', fg='#38BDF8')
+lbl_accion.pack(anchor='w', padx=10)
+# =====================================================================
+
 def is_finger_up(tip_y, mid_y, base_y):
     above_mid  = (mid_y  - tip_y) > THRESHOLD
     above_base = (base_y - tip_y) > THRESHOLD
@@ -35,15 +53,10 @@ def is_finger_up(tip_y, mid_y, base_y):
 
 def count_fingers(hand_landmarks):
     dedos = [False, False, False, False, False]
-    
     ancho_palma = np.hypot(hand_landmarks[5].x - hand_landmarks[17].x, hand_landmarks[5].y - hand_landmarks[17].y)
     distancia_pulgar_indice = np.hypot(hand_landmarks[4].x - hand_landmarks[5].x, hand_landmarks[4].y - hand_landmarks[5].y)
     
-    # --- LA CORRECCIÓN DE CALIBRACIÓN ---
-    # Bajamos de 1.1 a 0.85. Ahora detectará un pulgar separado de forma natural (gesto de "L"),
-    # sin exigirte que lo estires hasta que duela.
     pulgar_muy_extendido = distancia_pulgar_indice > (ancho_palma * 0.85)
-    
     if pulgar_muy_extendido:
         dedos[0] = True
 
@@ -64,45 +77,34 @@ def process_mouse_and_draw(bgr_frame, detection_result):
     h, w, _ = annotated.shape
 
     hand_landmarks_list = detection_result.hand_landmarks
-    handedness_list     = detection_result.handedness
-
     CONNECTIONS = [
         (0,1),(1,2),(2,3),(3,4), (0,5),(5,6),(6,7),(7,8),
         (0,9),(9,10),(10,11),(11,12), (0,13),(13,14),(14,15),(15,16),
         (0,17),(17,18),(18,19),(19,20), (5,9),(9,13),(13,17)
     ]
 
-    total_fingers = 0
-    accion_actual = "Ninguna"
+    accion_actual = "NINGUNA DETECCION"
 
     if cooldown_click > 0: cooldown_click -= 1
 
     for idx in range(len(hand_landmarks_list)):
         hand_landmarks = hand_landmarks_list[idx]
-        handedness     = handedness_list[idx]
-        label          = handedness[0].category_name
         points = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
 
         dedos_levantados, ancho_palma = count_fingers(hand_landmarks)
         cantidad_dedos = sum(dedos_levantados)
-        total_fingers += cantidad_dedos
 
         p_pulgar = hand_landmarks[4]
         p_indice = hand_landmarks[8] 
         
-        # Pellizco: Mantenemos el umbral de 0.35 que te funcionó perfecto contra clics fantasmas
         distancia_pinza = np.hypot(p_indice.x - p_pulgar.x, p_indice.y - p_pulgar.y)
         es_pellizco = distancia_pinza < (ancho_palma * 0.35)
         
         if cantidad_dedos >= 2: puno_bloqueado = False
 
-       # --- 1. MOVER CURSOR ---
+        # --- 1. MOVER CURSOR (Caja Virtual al 65%) ---
         if dedos_levantados[1] and not dedos_levantados[0] and not es_pellizco and not dedos_levantados[2]:
             accion_actual = "MOVER CURSOR"
-            
-            # --- ZONA ACTIVA OPTIMIZADA (Virtual Bounding Box) ---
-            # X: 15% al 85% de la cámara
-            # Y: 15% al 65% de la cámara (El 0.65 asegura que llegues a la barra de tareas rápido)
             target_x = np.interp(p_indice.x, (0.15, 0.85), (0, screen_width))
             target_y = np.interp(p_indice.y, (0.15, 0.65), (0, screen_height))
             
@@ -110,13 +112,12 @@ def process_mouse_and_draw(bgr_frame, detection_result):
             smooth_y = smooth_y + (target_y - smooth_y) / 5
             pyautogui.moveTo(int(smooth_x), int(smooth_y))
 
-        # --- 2. LÓGICA DE CLICS CON MEMORIA ---
+        # --- 2. CLICS (Doble y Sencillo) ---
         if es_pellizco and not estado_pellizco_anterior and not dedos_levantados[2]:
             tiempo_actual = time.time()
-            
             if (tiempo_actual - tiempo_ultimo_clic) < 0.5:
                 pyautogui.doubleClick()
-                accion_actual = "DOBLE CLIC!"
+                accion_actual = "DOBLE CLIC"
                 tiempo_ultimo_clic = 0.0  
             else:
                 pyautogui.click()
@@ -143,6 +144,10 @@ def process_mouse_and_draw(bgr_frame, detection_result):
                 cooldown_click = 20
                 accion_actual = "MINIMIZAR TODO"
 
+        # --- ACTUALIZAR WIDGET FLOTANTE ---
+        lbl_accion.config(text=f"ESTADO: {accion_actual}")
+        overlay_tk.update()  # Refresca la ventana flotante en tiempo real
+
         # --- DIBUJAR EN PANTALLA ---
         for start, end in CONNECTIONS:
             cv2.line(annotated, points[start], points[end], (0, 200, 255), 2)
@@ -151,16 +156,13 @@ def process_mouse_and_draw(bgr_frame, detection_result):
             if es_pellizco and i in [4, 8]: color = (0, 0, 255) 
             cv2.circle(annotated, point, 6, color, -1)
             
-    # --- DIBUJAR LA CAJA VIRTUAL (Área Activa) ---
-    # Esto le mostrará a la maestra exactamente en qué recuadro debes mover la mano
+    # Dibujar la Caja Virtual (Área Activa)
     cv2.rectangle(annotated, (int(w * 0.15), int(h * 0.15)), (int(w * 0.85), int(h * 0.65)), (255, 0, 255), 2)
-            
-    # Panel de control
-    overlay = annotated.copy()
-    cv2.rectangle(overlay, (10, 10), (380, 90), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.5, annotated, 0.5, 0, annotated)
-    cv2.putText(annotated, f"Dedos: {total_fingers}", (20, 45), cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 2)
-    cv2.putText(annotated, f"Accion: {accion_actual}", (20, 80), cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 255), 2)
+
+    # Si no hay manos en la pantalla, actualizar el widget a inactivo
+    if len(hand_landmarks_list) == 0:
+        lbl_accion.config(text="ESTADO: ESPERANDO MANO...")
+        overlay_tk.update()
 
     return annotated
 
@@ -190,6 +192,8 @@ while True:
 
     if cv2.waitKey(5) & 0xFF in [ord('q'), 27]: break
 
+# Cerrar todo al terminar
 cap.release()
 detector.close()
 cv2.destroyAllWindows()
+overlay_tk.destroy()
