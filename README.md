@@ -4,7 +4,6 @@
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=for-the-badge&logo=python)
 ![OpenCV](https://img.shields.io/badge/OpenCV-4.x-green?style=for-the-badge&logo=opencv)
 ![MediaPipe](https://img.shields.io/badge/MediaPipe-Tasks-orange?style=for-the-badge)
-![License](https://img.shields.io/badge/Licencia-MIT-blueviolet?style=for-the-badge)
 
 ## 🏛️ Información Académica
 **Universidad Autónoma de Sinaloa (UAS) - Facultad de Informática Mazatlán (FIMAZ)**
@@ -65,8 +64,9 @@ Para iniciar el sistema de IA, ejecuta el script principal desde la terminal:
 Bash
 python main.py
 (Nota: Asegúrate de tener una cámara web conectada y funcional, y de contar con buena iluminación frontal para optimizar la inferencia del modelo).
+```
 
-📈 Limitaciones y Trabajo Futuro
+## 📈 Limitaciones y Trabajo Futuro
 Sensibilidad a la luz: El modelo pre-entrenado presenta una ligera caída en la exactitud en entornos con bajo contraste o retroiluminación extrema.
 
 Futuras implementaciones: Se planea expandir la matriz de gestos para incluir funciones complejas de navegación (Scroll vertical, arrastrar y soltar) y habilitar la calibración paramétrica directamente desde el widget flotante.
