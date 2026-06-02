@@ -18,14 +18,14 @@ FINGER_TIPS  = [4,  8,  12, 16, 20]
 FINGER_MID   = [3,  7,  11, 15, 19]
 FINGER_BASES = [2,  6,  10, 14, 18]
 
-THRESHOLD = 0.03           # BAJAMOS EL UMBRAL para que sea más fácil detectar el índice
+THRESHOLD = 0.015           
 THUMB_ANGLE_THRESHOLD = 150 
 
 smooth_x, smooth_y = 0, 0
 cooldown_click = 0
 screen_width, screen_height = pyautogui.size()
 
-# NUEVA VARIABLE: Bloqueo de Puño (Latch)
+# Bloqueo de Puño
 puno_bloqueado = False 
 
 def calculate_angle(p1, p2, p3):
@@ -90,47 +90,58 @@ def process_mouse_and_draw(bgr_frame, detection_result):
         cantidad_dedos = sum(dedos_levantados)
         total_fingers += cantidad_dedos
 
+        p_pulgar = hand_landmarks[4]
         p_indice = hand_landmarks[8] 
         
+        # CÁLCULO DE DISTANCIA DEL PELLIZCO (Pinch)
+        distancia_pinza = np.hypot(p_indice.x - p_pulgar.x, p_indice.y - p_pulgar.y)
+        
         # --- DESBLOQUEO DEL PUÑO ---
-        # Si tienes 2 o más dedos levantados, el sistema entiende que ya abriste la mano
         if cantidad_dedos >= 2:
             puno_bloqueado = False
 
-        # --- SELECCIÓN DE ACCIONES ---
+        # --- LÓGICA DE INTERACCIÓN NUI (Natural User Interface) ---
         
-        # 1. Mover cursor: Índice arriba. Medio, Anular y Meñique ABAJO. (Ignoramos el pulgar)
-        if dedos_levantados[1] and not dedos_levantados[2] and not dedos_levantados[3] and not dedos_levantados[4]:
+        # 1. MOVER CURSOR: Índice arriba. Pulgar estrictamente ABAJO.
+        if dedos_levantados[1] and not dedos_levantados[0] and not dedos_levantados[2]:
             accion_actual = "MOVER CURSOR"
             target_x = np.interp(p_indice.x, (0.3, 0.7), (0, screen_width))
             target_y = np.interp(p_indice.y, (0.3, 0.7), (0, screen_height))
-            smooth_x = smooth_x + (target_x - smooth_x) / 2
-            smooth_y = smooth_y + (target_y - smooth_y) / 2
+            
+            smooth_x = smooth_x + (target_x - smooth_x) / 6
+            smooth_y = smooth_y + (target_y - smooth_y) / 6
             pyautogui.moveTo(int(smooth_x), int(smooth_y))
 
         if cooldown_click == 0:
-            # 2. Clic Izquierdo: Pulgar e Índice arriba, los demás abajo
-            if dedos_levantados[0] and dedos_levantados[1] and not dedos_levantados[2]:
+            
+            # 2. PELLIZCO (CLIC IZQUIERDO): Si juntas las puntas hace el clic
+            if distancia_pinza < 0.04 and not dedos_levantados[2]:
                 pyautogui.click()
-                cooldown_click = 10
-                accion_actual = "CLIC IZQ"
+                cooldown_click = 15
+                accion_actual = "CLIC IZQ (Pellizco!)"
 
-            # 3. Clic Derecho: Pulgar, Índice y Medio arriba
-            elif dedos_levantados[0] and dedos_levantados[1] and dedos_levantados[2] and not dedos_levantados[3]:
+            # 3. CONGELADO (PREPARAR CLIC): Pulgar e Índice arriba, pero separados
+            elif dedos_levantados[0] and dedos_levantados[1] and not dedos_levantados[2] and distancia_pinza >= 0.04:
+                accion_actual = "CONGELADO (Apunta)"
+                # No hay movimiento de mouse aquí, se queda quieto como pediste
+
+            # 4. CLIC DERECHO: Pulgar, Índice y Medio arriba
+            elif dedos_levantados[0] and dedos_levantados[1] and dedos_levantados[2]:
                 pyautogui.rightClick()
                 cooldown_click = 15
                 accion_actual = "CLIC DER"
 
-            # 4. Doble Clic: Índice y Medio arriba, pulgar abajo
-            elif not dedos_levantados[0] and dedos_levantados[1] and dedos_levantados[2] and not dedos_levantados[3]:
+            # 5. DOBLE CLIC: Índice y Medio arriba (Sin pulgar)
+            elif not dedos_levantados[0] and dedos_levantados[1] and dedos_levantados[2]:
                 pyautogui.doubleClick()
                 cooldown_click = 15
                 accion_actual = "DOBLE CLIC"
 
-            # 5. Minimizar Todo: Cero dedos Y el puño no está bloqueado
-            elif cantidad_dedos == 0 and not puno_bloqueado:
+            # 6. MINIMIZAR TODO (Puño cerrado)
+            # Validamos que no esté pellizcando para que no se confunda el puño
+            elif cantidad_dedos == 0 and not puno_bloqueado and distancia_pinza >= 0.05:
                 pyautogui.hotkey('win', 'd')
-                puno_bloqueado = True  # ¡AQUÍ ESTÁ LA MAGIA! Se bloquea hasta que abras la mano
+                puno_bloqueado = True  
                 cooldown_click = 20
                 accion_actual = "MINIMIZAR TODO"
 
@@ -139,18 +150,21 @@ def process_mouse_and_draw(bgr_frame, detection_result):
             cv2.line(annotated, points[start], points[end], (0, 200, 255), 2)
         for i, point in enumerate(points):
             color = (0, 255, 100) if i in FINGER_TIPS else (255, 255, 255)
+            # Dibujar un círculo rojo en el índice y pulgar si están pellizcando
+            if distancia_pinza < 0.04 and i in [4, 8]:
+                color = (0, 0, 255)
             cv2.circle(annotated, point, 6, color, -1)
             
-    # Panel de control
+    # Panel de control superior
     overlay = annotated.copy()
-    cv2.rectangle(overlay, (10, 10), (320, 90), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (10, 10), (380, 90), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.5, annotated, 0.5, 0, annotated)
     cv2.putText(annotated, f"Dedos: {total_fingers}", (20, 45), cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 2)
     cv2.putText(annotated, f"Accion: {accion_actual}", (20, 80), cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 255), 2)
 
     return annotated
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN MEDIAPIPE ---
 base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
 options = vision.HandLandmarkerOptions(
     base_options=base_options, num_hands=1, running_mode=vision.RunningMode.VIDEO
@@ -172,7 +186,7 @@ while True:
     frame_timestamp += 1
 
     output_frame = process_mouse_and_draw(frame, detection_result)
-    cv2.imshow("Mouse Virtual Inteligente - FIMAZ", output_frame)
+    cv2.imshow("Mouse Virtual Inteligente - Pinch to Click", output_frame)
 
     if cv2.waitKey(5) & 0xFF in [ord('q'), 27]: break
 
